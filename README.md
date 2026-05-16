@@ -50,7 +50,7 @@ legacy-forge/
 ## Quick start
 
 ```powershell
-# Requires Python 3.11+
+# Requires Python 3.10+
 pip install -e .
 
 forge --help
@@ -61,7 +61,7 @@ forge eval run java-lang-migrator
 
 ## 快速開始（繁體中文）
 
-> 需要 Python 3.11+ 與 git。Windows 使用者建議把 `C:\Program Files\GitHub CLI` 加到使用者 PATH。
+> 需要 Python 3.10+ 與 git。Windows 使用者建議把 `C:\Program Files\GitHub CLI` 加到使用者 PATH。
 
 ### 安裝
 

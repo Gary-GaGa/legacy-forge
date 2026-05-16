@@ -5,7 +5,7 @@ Operational playbook for humans running legacy-forge.
 ## First-time setup
 
 ```powershell
-# Python 3.11+
+# Python 3.10+
 pip install -e ".[dev]"
 
 # Smoke test
@@ -44,7 +44,7 @@ forge phases
 ## 首次設定
 
 ```powershell
-# 需要 Python 3.11+
+# 需要 Python 3.10+
 pip install -e ".[dev]"
 
 # 煙霧測試（驗證骨架沒爛）

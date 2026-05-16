@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11"   # CI pins 3.11 for forward-compat; local supports 3.10+
       - name: Install
         run: pip install -e ".[dev]"
       - name: Smoke tests
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11"   # CI pins 3.11 for forward-compat; local supports 3.10+
       - run: pip install -e ".[dev]"
       - name: Run eval suite
         run: forge eval run java-lang-migrator

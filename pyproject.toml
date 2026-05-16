@@ -7,7 +7,7 @@ name = "legacy-forge"
 version = "0.0.1"
 description = "AI-agent Harness for migrating legacy Java/JEE projects to modern Java + Angular"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "TBD" }
 authors = [{ name = "Gary" }]
 dependencies = [
@@ -33,7 +33,7 @@ include = ["forge*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
