@@ -1,0 +1,17 @@
+id: jlm-01-anonymous-runnable-smoke
+agent: java-lang-migrator
+fixture: anonymous_runnable.java
+description: |
+  Wiring smoke: agent runs end-to-end, EchoProvider passthrough marker
+  is present, the original class/package survives the round trip,
+  and no spurious jakarta drift appears.
+input:
+  target_java: 21
+expect:
+  contains:
+    - "package com.example"
+    - "class TaskRunner"
+    - "FORGE: echo provider passthrough"
+  not_contains:
+    - "jakarta."
+    - "TODO"

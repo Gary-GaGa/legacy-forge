@@ -1,0 +1,15 @@
+id: jlm-03-try-finally-smoke
+agent: java-lang-migrator
+fixture: try_finally_close.java
+description: |
+  Verifies the agent preserves resource-management patterns end-to-end.
+  Real migration assertion (try-with-resources) requires a real provider
+  and will be enabled when CodexProvider is wired.
+input:
+  target_java: 21
+expect:
+  contains:
+    - "class FirstBytesReader"
+    - "FORGE: echo provider passthrough"
+  not_contains:
+    - "jakarta."

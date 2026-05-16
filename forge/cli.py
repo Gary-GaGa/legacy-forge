@@ -1,13 +1,10 @@
 """`forge` CLI entry point.
 
-Minimal commands to verify the skeleton works end-to-end:
-
-    forge trace ls
-    forge worktree create <name>
-    forge worktree ls
-    forge worktree release <name>
-    forge eval run <agent>
     forge phases
+    forge trace ls
+    forge worktree create <name> | ls | release <name> | gc
+    forge eval ls [agent]
+    forge eval run <agent> [--provider echo|codex]
 """
 
 from __future__ import annotations
@@ -19,9 +16,17 @@ from rich.console import Console
 from rich.table import Table
 
 from forge import __version__
-from forge.evals.runner import discover_cases
+from forge.agents import registry as agent_registry
+from forge.agents.base import AgentContext
+from forge.agents.java_lang_migrator import JavaLangMigratorInput
+from forge.budget import Budget
+from forge.evals.case import EvalCase
+from forge.evals.runner import discover_cases, score
+from forge.llm.codex import CodexProvider
+from forge.llm.echo import EchoProvider
+from forge.llm.provider import LLMProvider
 from forge.orchestrator import default_pipeline
-from forge.tracer import Tracer
+from forge.tracer import Tracer, new_run_id
 from forge.worktree import WorktreeManager
 
 console = Console()
@@ -33,6 +38,14 @@ def _repo_root() -> Path:
 
 def _trace_db() -> Path:
     return _repo_root() / ".forge" / "trace.sqlite"
+
+
+def _make_provider(name: str) -> LLMProvider:
+    if name == "echo":
+        return EchoProvider()
+    if name == "codex":
+        return CodexProvider()
+    raise click.ClickException(f"unknown provider: {name}. Try 'echo' or 'codex'.")
 
 
 @click.group()
@@ -130,15 +143,87 @@ def eval_ls(agent: str | None) -> None:
 
 @eval.command("run")
 @click.argument("agent")
-def eval_run(agent: str) -> None:
+@click.option(
+    "--provider",
+    type=click.Choice(["echo", "codex"]),
+    default="echo",
+    show_default=True,
+    help="LLM provider to drive the agent.",
+)
+def eval_run(agent: str, provider: str) -> None:
     cases_dir = _repo_root() / "evals" / "cases"
+    fixtures_dir = _repo_root() / "evals" / "fixtures"
+    prompts_dir = _repo_root() / "prompts"
+
     cases = discover_cases(cases_dir, agent)
     if not cases:
         console.print(f"[yellow]no cases for agent '{agent}'[/]")
         raise SystemExit(1)
+
+    try:
+        factory = agent_registry.get(agent)
+    except KeyError as e:
+        raise click.ClickException(str(e))
+
+    provider_obj = _make_provider(provider)
+    agent_obj = factory(provider_obj, prompts_dir)
+
+    tracer = Tracer(_trace_db())
+    budget = Budget()
+    run_id = new_run_id()
+
+    table = Table(title=f"{agent} — eval results (provider={provider}, run={run_id[:8]})")
+    table.add_column("case")
+    table.add_column("result")
+    table.add_column("notes")
+
+    passed = 0
+    with tracer.span("run", f"eval:{agent}", run_id=run_id) as run_span:
+        for case in cases:
+            ctx = AgentContext(
+                run_id=run_id,
+                tracer=tracer,
+                budget=budget,
+                attrs={"phase": "eval", "agent": agent},
+            )
+            output_text = _run_one(agent, case, fixtures_dir, agent_obj, ctx)
+            result = score(output_text, case)
+            if result.passed:
+                passed += 1
+                table.add_row(case.id, "[green]PASS[/]", "")
+            else:
+                table.add_row(case.id, "[red]FAIL[/]", "; ".join(result.failures))
+        run_span.attrs = {"cases": str(len(cases)), "passed": str(passed)}
+
+    console.print(table)
     console.print(
-        f"[dim]found {len(cases)} case(s) — wiring an actual runner is the next step[/]"
+        f"pass rate: [bold]{passed}/{len(cases)}[/] "
+        f"({passed/len(cases):.0%})  •  budget: {budget.snapshot()}"
     )
+    if passed != len(cases):
+        raise SystemExit(1)
+
+
+def _run_one(
+    agent: str,
+    case: EvalCase,
+    fixtures_dir: Path,
+    agent_obj,
+    ctx: AgentContext,
+) -> str:
+    fixture_path = fixtures_dir / case.fixture
+    source = fixture_path.read_text(encoding="utf-8")
+
+    if agent == "java-lang-migrator":
+        inp = JavaLangMigratorInput(
+            source_path=case.fixture,
+            source_code=source,
+            target_java=int(case.input.get("target_java", 21)),
+        )
+        out = agent_obj.run(ctx, inp)
+        return out.migrated_code
+
+    raise click.ClickException(f"no input adapter wired for agent '{agent}'")
 
 
 # ---- phases ---------------------------------------------------------------

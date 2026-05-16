@@ -24,7 +24,9 @@ See [docs/seven-pillars.md](docs/seven-pillars.md) for the long form.
 
 ## Status
 
-**Skeleton.** Tracer, eval runner, worktree manager, and orchestrator scaffolding are in place; agents are stubs. The first concrete agent target is the Java Lang Migrator (Java 7 → 21 language-level rewrite) — it will exercise the full pillar set end-to-end and become the template for the rest.
+**Skeleton + first agent.** The Harness (tracer, eval runner, worktree manager, orchestrator, budget, provenance, memory) is in place AND the first concrete agent — **Java Lang Migrator** — is wired through it end-to-end, exercising every pillar.
+
+Today's `forge eval run java-lang-migrator` runs against an `EchoProvider` (offline, free) and passes 5/5 wiring cases. To run against real models, fill in `forge/llm/codex.py::CodexProvider._invoke_codex` with your verified `codex` CLI invocation, then `forge eval run java-lang-migrator --provider codex`. Real-migration assertion cases (java.time, try-with-resources, multi-catch, lambda) get added once the real provider is live.
 
 ## Layout
 
@@ -117,13 +119,11 @@ forge --version
 
 ## Not yet implemented
 
-This is the bare skeleton. The following are stubs awaiting a target codebase:
-
-- Concrete agent implementations (the 10 agents from the design doc)
-- LLM provider adapters beyond the trace shape
+- 9 of 10 agents (Inventory, Characterizer, Framework Migrator, API Extractor, UI Mapper, Angular Scaffolder, Test Translator, Equivalence Verifier, Refactor Reviewer)
+- `CodexProvider._invoke_codex` (stub raises NotImplementedError until wired)
+- `forge agent run-on-file <path>` — runs an agent on a real file with worktree + provenance trail. Eval path works today; production path coming next.
 - Network egress whitelist (sandbox layer)
-- CI workflow (eval-as-code) — wired structurally, no real cases yet
-- Cookbook content beyond the javax→jakarta seed
+- Cookbook beyond the javax→jakarta seed
 
 ## License
 

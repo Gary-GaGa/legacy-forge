@@ -1,0 +1,15 @@
+id: jlm-05-multi-catch-smoke
+agent: java-lang-migrator
+fixture: multi_catch.java
+description: |
+  Verifies the agent passes multi-catch-candidate fixtures through
+  intact. Real assertion (catch (IOException | RuntimeException e))
+  is a later case under a real provider.
+input:
+  target_java: 21
+expect:
+  contains:
+    - "class ExceptionHandler"
+    - "FORGE: echo provider passthrough"
+  not_contains:
+    - "jakarta."

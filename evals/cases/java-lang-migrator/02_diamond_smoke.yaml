@@ -1,0 +1,15 @@
+id: jlm-02-diamond-smoke
+agent: java-lang-migrator
+fixture: diamond_missing.java
+description: |
+  Verifies the agent passes generic-collection fixtures through the
+  full pipeline without dropping content.
+input:
+  target_java: 21
+expect:
+  contains:
+    - "class CollectionsFactory"
+    - "List<String>"
+    - "FORGE: echo provider passthrough"
+  not_contains:
+    - "jakarta."

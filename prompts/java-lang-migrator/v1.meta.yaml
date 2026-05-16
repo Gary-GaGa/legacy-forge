@@ -1,0 +1,10 @@
+model_hint: gpt-5-codex
+temperature: 0.0
+max_tokens: 8192
+input_schema: forge.agents.java_lang_migrator.JavaLangMigratorInput
+output_schema: forge.agents.java_lang_migrator.JavaLangMigratorOutput
+notes: |
+  v1 covers language-level rewrites only. Namespace migration and
+  framework upgrades are explicitly out of scope and live in separate
+  agents. The prompt instructs the model to fall back to "leave
+  unchanged + FORGE-REVIEW comment" rather than guess.

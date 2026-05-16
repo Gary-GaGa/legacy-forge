@@ -1,0 +1,15 @@
+id: jlm-04-date-smoke
+agent: java-lang-migrator
+fixture: date_basic.java
+description: |
+  Verifies the agent passes Date/SimpleDateFormat fixtures through
+  intact. Real assertion (java.time migration) is a later case under
+  a real provider.
+input:
+  target_java: 21
+expect:
+  contains:
+    - "class Timestamper"
+    - "FORGE: echo provider passthrough"
+  not_contains:
+    - "jakarta."

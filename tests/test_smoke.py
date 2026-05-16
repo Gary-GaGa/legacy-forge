@@ -9,13 +9,26 @@ from pathlib import Path
 
 import pytest
 
+from forge.agents.base import AgentContext
+from forge.agents.java_lang_migrator import (
+    JavaLangMigrator,
+    JavaLangMigratorInput,
+    extract_java_block,
+    extract_review_notes,
+)
 from forge.budget import Budget, BudgetExhausted
 from forge.evals.case import EvalCase, Expectation
 from forge.evals.runner import score
+from forge.llm.echo import MARKER, EchoProvider
 from forge.memory.store import PhaseMemory
 from forge.orchestrator import CycleError, Phase, default_pipeline, toposort
+from forge.prompt import Prompt, PromptMeta, load_prompt, render
 from forge.provenance import Trail, read_trail, write_trail
 from forge.tracer import Tracer, new_run_id
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PROMPTS_DIR = _REPO_ROOT / "prompts"
+_FIXTURES_DIR = _REPO_ROOT / "evals" / "fixtures"
 
 
 def test_default_pipeline_is_dag():
@@ -97,6 +110,76 @@ def test_phase_memory_roundtrip(tmp_path: Path):
     assert m.list_keys("p2") == ["skipped_files"]
     m.delete("p2", "skipped_files")
     assert m.get("p2", "skipped_files") is None
+
+
+# ---- Java Lang Migrator ----------------------------------------------------
+
+
+def test_prompt_loads_and_renders():
+    prompt = load_prompt("java-lang-migrator", "v1", prompts_dir=_PROMPTS_DIR)
+    rendered = render(
+        prompt,
+        target_java=21,
+        source_path="Foo.java",
+        source_code="class Foo {}",
+    )
+    assert "Target Java: 21" in rendered
+    assert "class Foo {}" in rendered
+    assert "{{" not in rendered  # all placeholders filled
+
+
+def test_prompt_unfilled_placeholder_raises():
+    p = Prompt(agent="x", version="v1", body="hello {{name}}", meta=PromptMeta())
+    with pytest.raises(ValueError, match="unfilled placeholders"):
+        render(p)  # name not supplied
+
+
+def test_echo_provider_wraps_in_marker():
+    provider = EchoProvider()
+    src = "class Demo { void f() {} }"
+    fake_prompt = f"some preamble\n\n```java\n{src}\n```\n"
+    resp = provider.complete(fake_prompt)
+    assert MARKER in resp.text
+    assert src in resp.text
+    assert resp.model == "echo-noop-v0"
+    assert resp.tokens_in > 0
+
+
+def test_extract_java_block_picks_last_fenced_block():
+    text = "noise\n```java\nA\n```\nmore\n```java\nFINAL\n```\n"
+    assert extract_java_block(text) == "FINAL"
+
+
+def test_extract_review_notes_finds_forge_review_markers():
+    code = "class X {}\n// FORGE-REVIEW: timezone semantics uncertain\n"
+    assert extract_review_notes(code) == ["timezone semantics uncertain"]
+
+
+def test_java_lang_migrator_end_to_end(tmp_path: Path):
+    tracer = Tracer(tmp_path / "trace.sqlite")
+    budget = Budget()
+    run_id = new_run_id()
+    ctx = AgentContext(run_id=run_id, tracer=tracer, budget=budget)
+
+    agent = JavaLangMigrator(EchoProvider(), prompts_dir=_PROMPTS_DIR)
+    src = (_FIXTURES_DIR / "anonymous_runnable.java").read_text(encoding="utf-8")
+    out = agent.run(
+        ctx,
+        JavaLangMigratorInput(
+            source_path="anonymous_runnable.java", source_code=src, target_java=21
+        ),
+    )
+
+    assert MARKER in out.migrated_code
+    assert "class TaskRunner" in out.migrated_code
+    assert out.model == "echo-noop-v0"
+    assert out.prompt_version == "v1"
+
+    spans = tracer.query_run(run_id)
+    kinds = {s["kind"] for s in spans}
+    assert {"agent", "llm"} <= kinds
+    assert budget.iterations == 1
+    assert budget.tokens_used > 0
 
 
 def test_provenance_roundtrip(tmp_path: Path):
