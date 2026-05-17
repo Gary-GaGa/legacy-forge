@@ -18,6 +18,16 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+class BudgetCaps(BaseModel):
+    """Per-agent budget overrides. Any field left None falls back to the
+    global Budget defaults at runtime."""
+
+    max_tokens: int | None = None
+    max_dollars: float | None = None
+    max_wallclock_s: float | None = None
+    max_iterations: int | None = None
+
+
 class PromptMeta(BaseModel):
     model_hint: str = ""
     temperature: float = 0.0
@@ -25,6 +35,7 @@ class PromptMeta(BaseModel):
     input_schema: str = ""        # dotted path to pydantic class
     output_schema: str = ""
     notes: str = ""
+    budget: BudgetCaps = Field(default_factory=BudgetCaps)
     extra: dict = Field(default_factory=dict)
 
 

@@ -10,6 +10,5 @@ input:
 expect:
   contains:
     - "class ExceptionHandler"
-    - "FORGE: echo provider passthrough"
   not_contains:
     - "jakarta."

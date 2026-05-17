@@ -33,7 +33,16 @@ console = Console()
 
 
 def _repo_root() -> Path:
-    return Path.cwd()
+    """Walk up from cwd looking for `.git/` or `pyproject.toml`.
+
+    Falls back to cwd if neither is found, so the CLI still works in
+    non-git scratch dirs (tests, throwaway demos).
+    """
+    cur = Path.cwd().resolve()
+    for parent in [cur, *cur.parents]:
+        if (parent / ".git").exists() or (parent / "pyproject.toml").exists():
+            return parent
+    return cur
 
 
 def _trace_db() -> Path:
@@ -46,6 +55,33 @@ def _make_provider(name: str) -> LLMProvider:
     if name == "codex":
         return CodexProvider()
     raise click.ClickException(f"unknown provider: {name}. Try 'echo' or 'codex'.")
+
+
+def _budget_for(agent: str, prompts_dir: Path) -> Budget:
+    """Construct a Budget using the agent's prompt-meta caps where present.
+
+    Each agent declares its own caps under `budget:` in its `<version>.meta.yaml`.
+    Missing fields fall back to global defaults so we never silently run an
+    agent under another agent's cost ceiling.
+    """
+    from forge.prompt import load_prompt
+
+    defaults = Budget()
+    try:
+        prompt = load_prompt(agent, "v1", prompts_dir=prompts_dir)
+    except FileNotFoundError:
+        return defaults
+    caps = prompt.meta.budget
+    return Budget(
+        max_tokens=caps.max_tokens if caps.max_tokens is not None else defaults.max_tokens,
+        max_dollars=caps.max_dollars if caps.max_dollars is not None else defaults.max_dollars,
+        max_wallclock_s=(
+            caps.max_wallclock_s if caps.max_wallclock_s is not None else defaults.max_wallclock_s
+        ),
+        max_iterations=(
+            caps.max_iterations if caps.max_iterations is not None else defaults.max_iterations
+        ),
+    )
 
 
 @click.group()
@@ -165,11 +201,19 @@ def eval_run(agent: str, provider: str) -> None:
     except KeyError as e:
         raise click.ClickException(str(e))
 
+    if provider == "echo":
+        console.print(
+            "[bold yellow]WARNING:[/] EchoProvider is a wiring-test stub. "
+            "It does NOT call a model — these results are plumbing checks, "
+            "not real eval signal. Use --provider codex (once wired) for "
+            "real assertions."
+        )
+
     provider_obj = _make_provider(provider)
     agent_obj = factory(provider_obj, prompts_dir)
 
     tracer = Tracer(_trace_db())
-    budget = Budget()
+    budget = _budget_for(agent, prompts_dir)
     run_id = new_run_id()
 
     table = Table(title=f"{agent} — eval results (provider={provider}, run={run_id[:8]})")
@@ -232,10 +276,11 @@ def _run_one(
 def phases() -> None:
     """Show the canonical refactor phase DAG."""
     table = Table(title="default pipeline")
-    for col in ("phase", "depends_on", "description"):
+    for col in ("phase", "wired", "depends_on", "description"):
         table.add_column(col)
     for p in default_pipeline():
-        table.add_row(p.name, ", ".join(p.depends_on) or "-", p.description)
+        wired = "[green]yes[/]" if p.run is not None else "[dim]no[/]"
+        table.add_row(p.name, wired, ", ".join(p.depends_on) or "-", p.description)
     console.print(table)
 
 

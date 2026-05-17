@@ -1,24 +1,23 @@
-"""CodexProvider — shell out to OpenAI codex CLI.
+"""CodexProvider — shell out to an OpenAI codex-style CLI.
 
 Stub: wire your actual `codex` invocation in `_invoke_codex` when ready.
-The shape (subprocess + stdin prompt + stdout response) is in place so
-the agent / tracer / budget plumbing already works the moment you fill
+The shape (subprocess + stdin prompt + stdout JSON response) is in place
+so the agent / tracer / budget plumbing already works the moment you fill
 the gap.
 
-Reference invocation (verify against your installed codex CLI version):
-
-    codex exec --output-format=json --model=<model> <<<"<prompt>"
-
-If your CLI uses a different non-interactive entry point, adjust below.
+CodexProvider flattens the message list into a single text prompt before
+shelling out, because the codex CLI's non-interactive entry point takes
+a single prompt. A future SDK-based provider (Anthropic, OpenAI Responses
+API) should pass the full message array through so multi-turn tool-use
+survives.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 
-from forge.llm.provider import CompletionResponse
+from forge.llm.provider import CompletionResponse, Message
 
 
 @dataclass
@@ -34,10 +33,15 @@ class CodexProvider:
         self.config = config or CodexConfig()
         self.model = self.config.model
 
-    def complete(self, prompt: str, *, max_tokens: int = 4096) -> CompletionResponse:
+    def complete(
+        self,
+        messages: list[Message],
+        *,
+        max_tokens: int = 4096,
+        tools: list[dict] | None = None,
+    ) -> CompletionResponse:
+        prompt = _flatten(messages)
         raw = self._invoke_codex(prompt)
-        # Expected format depends on the CLI's --output-format=json schema.
-        # Adjust the keys below to match what your codex CLI version emits.
         try:
             parsed = json.loads(raw)
             text = parsed.get("output_text") or parsed.get("text") or raw
@@ -45,7 +49,6 @@ class CodexProvider:
             tokens_out = int(parsed.get("usage", {}).get("output_tokens", len(text) // 4))
             cost_usd = float(parsed.get("usage", {}).get("cost_usd", 0.0))
         except (json.JSONDecodeError, AttributeError, TypeError):
-            # Fallback: treat raw stdout as the response text
             text = raw
             tokens_in = len(prompt) // 4
             tokens_out = len(text) // 4
@@ -88,3 +91,7 @@ class CodexProvider:
         # if result.returncode != 0:
         #     raise RuntimeError(f"codex failed: {result.stderr.strip()}")
         # return result.stdout
+
+
+def _flatten(messages: list[Message]) -> str:
+    return "\n\n".join(f"[{m.role}]\n{m.content}" for m in messages)

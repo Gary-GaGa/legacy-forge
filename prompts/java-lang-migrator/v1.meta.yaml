@@ -3,6 +3,15 @@ temperature: 0.0
 max_tokens: 8192
 input_schema: forge.agents.java_lang_migrator.JavaLangMigratorInput
 output_schema: forge.agents.java_lang_migrator.JavaLangMigratorOutput
+# Per-agent budget caps. Each is optional; missing fields inherit Budget()
+# defaults. Lang-migrator is single-shot + small repair loop, so we cap it
+# tight — runaway loops here are almost certainly a bug, not legitimate
+# work.
+budget:
+  max_tokens: 100000
+  max_dollars: 0.50
+  max_wallclock_s: 180
+  max_iterations: 5
 notes: |
   v1 covers language-level rewrites only. Namespace migration and
   framework upgrades are explicitly out of scope and live in separate

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from forge.agents.base import AgentContext
+from forge.agents.base import AgentContext, AgentOutputError
 from forge.agents.java_lang_migrator import (
     JavaLangMigrator,
     JavaLangMigratorInput,
@@ -20,9 +20,18 @@ from forge.budget import Budget, BudgetExhausted
 from forge.evals.case import EvalCase, Expectation
 from forge.evals.runner import score
 from forge.llm.echo import MARKER, EchoProvider
+from forge.llm.provider import CompletionResponse, Message
 from forge.memory.store import PhaseMemory
-from forge.orchestrator import CycleError, Phase, default_pipeline, toposort
-from forge.prompt import Prompt, PromptMeta, load_prompt, render
+from forge.orchestrator import (
+    CycleError,
+    Orchestrator,
+    Phase,
+    PhaseContext,
+    PhaseResult,
+    default_pipeline,
+    toposort,
+)
+from forge.prompt import BudgetCaps, Prompt, PromptMeta, load_prompt, render
 from forge.provenance import Trail, read_trail, write_trail
 from forge.tracer import Tracer, new_run_id
 
@@ -138,7 +147,7 @@ def test_echo_provider_wraps_in_marker():
     provider = EchoProvider()
     src = "class Demo { void f() {} }"
     fake_prompt = f"some preamble\n\n```java\n{src}\n```\n"
-    resp = provider.complete(fake_prompt)
+    resp = provider.complete([Message(role="user", content=fake_prompt)])
     assert MARKER in resp.text
     assert src in resp.text
     assert resp.model == "echo-noop-v0"
@@ -198,3 +207,147 @@ def test_provenance_roundtrip(tmp_path: Path):
     loaded = read_trail(sidecar)
     assert loaded.agent == "java-lang-migrator"
     assert loaded.source_refs == ["legacy@deadbeef:src/old/Foo.java"]
+
+
+# ---- Output validation / repair loop --------------------------------------
+
+
+class _BrokenProvider:
+    """Always returns prose with no fenced java block."""
+
+    model = "broken-mock-v0"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, *, max_tokens=4096, tools=None):
+        self.calls += 1
+        return CompletionResponse(
+            text="I cannot do that. Here is some prose instead.",
+            model=self.model,
+            tokens_in=10,
+            tokens_out=10,
+            cost_usd=0.0,
+        )
+
+
+class _EventuallyOKProvider:
+    """Returns prose on the first call, a valid fenced block on the second."""
+
+    model = "flaky-mock-v0"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages, *, max_tokens=4096, tools=None):
+        self.calls += 1
+        text = (
+            "no code block here, sorry"
+            if self.calls == 1
+            else "```java\nclass Fixed {}\n```"
+        )
+        return CompletionResponse(
+            text=text, model=self.model, tokens_in=10, tokens_out=10, cost_usd=0.0
+        )
+
+
+def test_agent_raises_after_repair_attempts_exhausted(tmp_path: Path):
+    tracer = Tracer(tmp_path / "trace.sqlite")
+    budget = Budget()
+    run_id = new_run_id()
+    ctx = AgentContext(run_id=run_id, tracer=tracer, budget=budget)
+
+    provider = _BrokenProvider()
+    agent = JavaLangMigrator(provider, prompts_dir=_PROMPTS_DIR)
+    with pytest.raises(AgentOutputError):
+        agent.run(
+            ctx,
+            JavaLangMigratorInput(
+                source_path="x.java", source_code="class X {}", target_java=21
+            ),
+        )
+    # Initial attempt + max_repair_attempts retries.
+    assert provider.calls == JavaLangMigrator.max_repair_attempts + 1
+
+
+def test_agent_recovers_via_repair_attempt(tmp_path: Path):
+    tracer = Tracer(tmp_path / "trace.sqlite")
+    budget = Budget()
+    run_id = new_run_id()
+    ctx = AgentContext(run_id=run_id, tracer=tracer, budget=budget)
+
+    provider = _EventuallyOKProvider()
+    agent = JavaLangMigrator(provider, prompts_dir=_PROMPTS_DIR)
+    out = agent.run(
+        ctx,
+        JavaLangMigratorInput(
+            source_path="x.java", source_code="class X {}", target_java=21
+        ),
+    )
+    assert "class Fixed" in out.migrated_code
+    assert provider.calls == 2
+    # Two LLM round-trips => two budget ticks.
+    assert budget.iterations == 2
+
+
+# ---- Orchestrator end-to-end ----------------------------------------------
+
+
+def test_orchestrator_runs_wired_phase_and_propagates_artifacts():
+    seen: list[str] = []
+
+    def run_a(ctx: PhaseContext) -> PhaseResult:
+        seen.append(ctx.run_id)
+        return PhaseResult("a", status="ok", artifacts={"k": "v"})
+
+    def run_b(ctx: PhaseContext) -> PhaseResult:
+        # Artifact from `a` should be visible to `b`.
+        assert ctx.artifacts.get("k") == "v"
+        return PhaseResult("b", status="ok")
+
+    orch = Orchestrator([
+        Phase("a", "", run=run_a),
+        Phase("b", "", run=run_b, depends_on=("a",)),
+    ])
+    results = orch.run(PhaseContext(run_id="r1", repo_root="."))
+    assert seen == ["r1"]
+    assert [r.status for r in results] == ["ok", "ok"]
+
+
+def test_orchestrator_skips_after_failed_dep():
+    def run_fail(ctx: PhaseContext) -> PhaseResult:
+        return PhaseResult("a", status="error", error="boom")
+
+    def run_b(ctx: PhaseContext) -> PhaseResult:   # pragma: no cover - must not run
+        raise AssertionError("b ran despite a failing")
+
+    orch = Orchestrator([
+        Phase("a", "", run=run_fail),
+        Phase("b", "", run=run_b, depends_on=("a",)),
+    ])
+    results = {r.phase: r.status for r in orch.run(PhaseContext(run_id="r1", repo_root="."))}
+    assert results == {"a": "error", "b": "skipped"}
+
+
+def test_orchestrator_skips_unwired_phases():
+    """Default pipeline has all phases with run=None — must finish, all skipped."""
+    orch = Orchestrator(default_pipeline())
+    results = orch.run(PhaseContext(run_id="r1", repo_root="."))
+    assert all(r.status == "skipped" for r in results)
+
+
+# ---- Per-agent budget caps -------------------------------------------------
+
+
+def test_prompt_meta_loads_budget_caps():
+    prompt = load_prompt("java-lang-migrator", "v1", prompts_dir=_PROMPTS_DIR)
+    assert isinstance(prompt.meta.budget, BudgetCaps)
+    # Each cap should be present in the meta file we ship.
+    assert prompt.meta.budget.max_iterations is not None
+    assert prompt.meta.budget.max_iterations <= 30   # tighter than the global default
+
+
+def test_budget_caps_defaults_when_missing():
+    meta = PromptMeta()
+    assert meta.budget.max_tokens is None
+    assert meta.budget.max_iterations is None

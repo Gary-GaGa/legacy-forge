@@ -2,16 +2,17 @@ id: jlm-01-anonymous-runnable-smoke
 agent: java-lang-migrator
 fixture: anonymous_runnable.java
 description: |
-  Wiring smoke: agent runs end-to-end, EchoProvider passthrough marker
-  is present, the original class/package survives the round trip,
-  and no spurious jakarta drift appears.
+  Structural smoke: the original class/package survives the round trip
+  and no spurious jakarta drift appears. Assertions are provider-agnostic
+  so the same case stays meaningful when a real provider replaces echo.
+  Real-migration assertions (anonymous Runnable -> lambda) get added
+  once a real provider is wired.
 input:
   target_java: 21
 expect:
   contains:
     - "package com.example"
     - "class TaskRunner"
-    - "FORGE: echo provider passthrough"
   not_contains:
     - "jakarta."
     - "TODO"

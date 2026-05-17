@@ -27,6 +27,14 @@ In = TypeVar("In", bound=BaseModel)
 Out = TypeVar("Out", bound=BaseModel)
 
 
+class AgentOutputError(RuntimeError):
+    """Raised when an agent cannot produce a valid Output after all repair attempts.
+
+    Agents MUST raise this rather than silently falling back to the input —
+    silent fallback would make eval / production failure modes invisible.
+    """
+
+
 @dataclass
 class AgentContext:
     run_id: str

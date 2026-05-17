@@ -26,7 +26,7 @@ See [docs/seven-pillars.md](docs/seven-pillars.md) for the long form.
 
 **Skeleton + first agent.** The Harness (tracer, eval runner, worktree manager, orchestrator, budget, provenance, memory) is in place AND the first concrete agent — **Java Lang Migrator** — is wired through it end-to-end, exercising every pillar.
 
-Today's `forge eval run java-lang-migrator` runs against an `EchoProvider` (offline, free) and passes 5/5 wiring cases. To run against real models, fill in `forge/llm/codex.py::CodexProvider._invoke_codex` with your verified `codex` CLI invocation, then `forge eval run java-lang-migrator --provider codex`. Real-migration assertion cases (java.time, try-with-resources, multi-catch, lambda) get added once the real provider is live.
+Today's `forge eval run java-lang-migrator --provider echo` runs the agent end-to-end with the `EchoProvider` wiring stub. The eval cases assert structural properties (class/package preserved, no spurious `jakarta.` drift) that are provider-agnostic, so the same cases stay meaningful when a real provider replaces echo. **Echo is not a model and produces no real eval signal** — the CLI prints a warning to that effect when `--provider echo` is selected. To run against real models, fill in `forge/llm/codex.py::CodexProvider._invoke_codex` with your verified `codex` CLI invocation, then `forge eval run java-lang-migrator --provider codex`. Real-migration assertion cases (java.time, try-with-resources, multi-catch, lambda) get added once the real provider is live.
 
 ## Layout
 
@@ -36,12 +36,12 @@ legacy-forge/
 │   ├── cli.py              # `forge ...` entry point
 │   ├── orchestrator.py     # phase DAG + agent dispatch
 │   ├── tracer.py           # SQLite-backed LLM call trace
-│   ├── worktree.py         # git worktree lease manager
+│   ├── worktree.py         # git worktree lease manager (cross-process flock)
 │   ├── budget.py           # multi-dim budget (tokens × $ × wallclock × iter)
 │   ├── provenance.py       # .forge-trail.yaml writer
 │   ├── agents/             # Agent ABC + per-role agents (stubs)
 │   ├── evals/              # eval runner + case schema
-│   └── memory/             # L1–L4 memory layers
+│   └── memory/             # L2 phase KV store (L1/L3/L4 planned, not yet shipped)
 ├── prompts/                # versioned prompts (one dir per agent)
 ├── evals/                  # golden cases & fixtures (test data, not code)
 ├── cookbook/               # migration knowledge: javax→jakarta, deprecated APIs, …
@@ -122,6 +122,10 @@ forge --version
 - 9 of 10 agents (Inventory, Characterizer, Framework Migrator, API Extractor, UI Mapper, Angular Scaffolder, Test Translator, Equivalence Verifier, Refactor Reviewer)
 - `CodexProvider._invoke_codex` (stub raises NotImplementedError until wired)
 - `forge agent run-on-file <path>` — runs an agent on a real file with worktree + provenance trail. Eval path works today; production path coming next.
+- Orchestrator phase callables — `default_pipeline()` ships 7 phases, all `run=None`. Orchestrator runs (skips them all); `forge phases` shows a `wired` column flagging this.
+- Memory layers L1 (working), L3 (semantic), L4 (cookbook retrieval) — only L2 (phase KV store) ships today.
+- `expect.compiles` in eval cases — schema field exists but the runner ignores it; needs a javac sandbox.
+- Provenance PR hook that rejects generated files without a `.forge-trail.yaml`.
 - Network egress whitelist (sandbox layer)
 - Cookbook beyond the javax→jakarta seed
 

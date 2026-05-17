@@ -10,8 +10,9 @@ Exercises all seven pillars end-to-end:
 3. Evals               — see evals/cases/java-lang-migrator/
 4. Observability       — emits agent + llm spans into the tracer
 5. Sandbox             — read-only here; worktree owner-of-record for
-                         `forge agent run` (not yet implemented)
-6. Orchestration       — budget tick after every LLM round-trip
+                         `forge agent run-on-file` (not yet implemented)
+6. Orchestration       — budget tick after every LLM round-trip;
+                         repair loop on malformed model output
 7. Provenance          — write_trail() on outputs targeted at real files
 """
 
@@ -22,9 +23,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from forge.agents.base import Agent, AgentContext
-from forge.llm.provider import LLMProvider
+from forge.agents.base import Agent, AgentContext, AgentOutputError
+from forge.llm.provider import LLMProvider, Message
 from forge.prompt import Prompt, load_prompt, render
+
+_REPAIR_USER_MSG = (
+    "Your previous response did not contain a single fenced ```java block. "
+    "Output ONLY a single fenced ```java block containing the full migrated "
+    "file. No prose, no commentary, no multiple blocks."
+)
 
 
 class JavaLangMigratorInput(BaseModel):
@@ -44,6 +51,8 @@ class JavaLangMigrator(Agent[JavaLangMigratorInput, JavaLangMigratorOutput]):
     name = "java-lang-migrator"
     Input = JavaLangMigratorInput
     Output = JavaLangMigratorOutput
+
+    max_repair_attempts: int = 2
 
     def __init__(
         self,
@@ -74,6 +83,7 @@ class JavaLangMigrator(Agent[JavaLangMigratorInput, JavaLangMigratorOutput]):
             source_path=inp.source_path,
             source_code=inp.source_code,
         )
+        messages: list[Message] = [Message(role="user", content=rendered)]
 
         with ctx.tracer.span(
             "agent",
@@ -85,39 +95,56 @@ class JavaLangMigrator(Agent[JavaLangMigratorInput, JavaLangMigratorOutput]):
                 "source_path": inp.source_path,
             },
         ) as agent_span:
-            with ctx.tracer.span(
-                "llm",
-                "complete",
-                run_id=ctx.run_id,
-                parent_id=agent_span.span_id,
-            ) as llm_span:
-                resp = self.provider.complete(
-                    rendered, max_tokens=prompt.meta.max_tokens
+            last_text = ""
+            last_model = ""
+            for attempt in range(self.max_repair_attempts + 1):
+                with ctx.tracer.span(
+                    "llm",
+                    f"complete[{attempt}]",
+                    run_id=ctx.run_id,
+                    parent_id=agent_span.span_id,
+                ) as llm_span:
+                    resp = self.provider.complete(
+                        messages, max_tokens=prompt.meta.max_tokens
+                    )
+                    llm_span.model = resp.model
+                    llm_span.tokens_in = resp.tokens_in
+                    llm_span.tokens_out = resp.tokens_out
+                    llm_span.cache_read = resp.cache_read
+                    llm_span.cache_write = resp.cache_write
+                    llm_span.cost_usd = resp.cost_usd
+                    ctx.tracer.record_payload(
+                        llm_span.span_id, "prompt", _serialize_messages(messages)
+                    )
+                    ctx.tracer.record_payload(llm_span.span_id, "response", resp.text)
+
+                ctx.budget.tick(
+                    tokens_in=resp.tokens_in,
+                    tokens_out=resp.tokens_out,
+                    cache_read=resp.cache_read,
+                    dollars=resp.cost_usd,
                 )
-                llm_span.model = resp.model
-                llm_span.tokens_in = resp.tokens_in
-                llm_span.tokens_out = resp.tokens_out
-                llm_span.cache_read = resp.cache_read
-                llm_span.cache_write = resp.cache_write
-                llm_span.cost_usd = resp.cost_usd
-                ctx.tracer.record_payload(llm_span.span_id, "prompt", rendered)
-                ctx.tracer.record_payload(llm_span.span_id, "response", resp.text)
+                ctx.budget.bail_if_exhausted()
 
-            ctx.budget.tick(
-                tokens_in=resp.tokens_in,
-                tokens_out=resp.tokens_out,
-                cache_read=resp.cache_read,
-                dollars=resp.cost_usd,
-            )
-            ctx.budget.bail_if_exhausted()
+                last_text = resp.text
+                last_model = resp.model
 
-            migrated = extract_java_block(resp.text) or inp.source_code
-            notes = extract_review_notes(migrated)
-            return JavaLangMigratorOutput(
-                migrated_code=migrated,
-                review_notes=notes,
-                model=resp.model,
-                prompt_version=self.prompt_version,
+                migrated = extract_java_block(resp.text)
+                if migrated is not None:
+                    return JavaLangMigratorOutput(
+                        migrated_code=migrated,
+                        review_notes=extract_review_notes(migrated),
+                        model=resp.model,
+                        prompt_version=self.prompt_version,
+                    )
+
+                messages.append(Message(role="assistant", content=resp.text))
+                messages.append(Message(role="user", content=_REPAIR_USER_MSG))
+
+            raise AgentOutputError(
+                f"{self.name}: model={last_model} produced no fenced ```java "
+                f"block after {self.max_repair_attempts + 1} attempts. "
+                f"Last response (truncated): {last_text[:200]!r}"
             )
 
 
@@ -132,3 +159,7 @@ def extract_java_block(text: str) -> str | None:
 
 def extract_review_notes(code: str) -> list[str]:
     return [m.group(1).strip() for m in _REVIEW_RE.finditer(code)]
+
+
+def _serialize_messages(messages: list[Message]) -> str:
+    return "\n\n".join(f"[{m.role}]\n{m.content}" for m in messages)
