@@ -152,7 +152,7 @@ forge eval run java-lang-migrator --provider codex
 
 **禁止手動編輯 `.forge/trace.sqlite`** — 一動就破壞 replay 與 audit trail。
 
-### 完整使用情境見 [docs/runbook.md](docs/runbook.md)
+### 完整使用情境見 [docs/runbook.md](docs/runbook.md)；架構流程圖見 [docs/architecture.md](docs/architecture.md)
 
 ## Not yet implemented
 
