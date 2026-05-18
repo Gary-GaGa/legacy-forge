@@ -94,6 +94,43 @@ forge --version
 | `forge eval ls` | 列出所有 eval case |
 | `forge eval ls <agent>` | 只看某個 agent 的 case |
 | `forge eval run <agent>` | 跑某個 agent 的 eval suite |
+| `forge llm probe --provider codex` | 一鍵驗證 codex CLI 從 Python 通得到（debug 用） |
+
+### 接 codex CLI（Windows / 企業內網訂閱版）
+
+如果你的 Windows 環境只能用 codex CLI（無法直接打 OpenAI API token），不用改 `forge/llm/codex.py`，環境變數設一設就好：
+
+```powershell
+# 必要：codex 在 PowerShell 裡叫做 codex.cmd，要明指
+$env:FORGE_CODEX_BIN = "codex.cmd"
+
+# 可選：你的 codex 版本可能用別的 flag。先用 probe 試跑
+$env:FORGE_CODEX_MODEL = "gpt-5-codex"
+# 如果你的 codex 不吃 --model，就把這個 flag 拿掉
+# $env:FORGE_CODEX_MODEL_FLAG = ""
+
+# 先驗證 Python -> codex 接通
+forge llm probe --provider codex --prompt "Reply with: OK"
+
+# 通了之後跑真的 eval
+forge eval run java-lang-migrator --provider codex
+```
+
+支援的環境變數：
+
+| Env var | 預設 | 用途 |
+|---|---|---|
+| `FORGE_CODEX_BIN` | `codex` | binary 路徑（Windows 通常要 `codex.cmd`） |
+| `FORGE_CODEX_MODEL` | `gpt-5-codex` | model 名稱 |
+| `FORGE_CODEX_MODEL_FLAG` | `--model` | 怎麼指定 model；設成空字串就完全不傳 flag |
+| `FORGE_CODEX_SUBCMD` | `exec` | codex 的非互動子指令 |
+| `FORGE_CODEX_EXTRA` | (無) | 額外 args（空白分隔） |
+| `FORGE_CODEX_TIMEOUT` | `600` | 單次 LLM call 的逾時秒數 |
+
+**怎麼除錯**：`forge llm probe` 印出失敗原因的完整 stderr。常見：
+- `codex CLI not found` → `FORGE_CODEX_BIN` 沒設或 PATH 沒過去
+- `codex exited 2: auth failed` → 先在那台機器跑一次 `codex login`
+- `codex timed out` → prompt 太長或 codex 卡 thinking；調高 `FORGE_CODEX_TIMEOUT`
 
 ### 典型工作流程
 

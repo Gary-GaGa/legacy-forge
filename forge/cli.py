@@ -5,10 +5,12 @@
     forge worktree create <name> | ls | release <name> | gc
     forge eval ls [agent]
     forge eval run <agent> [--provider echo|codex]
+    forge llm probe [--provider echo|codex] [--prompt TEXT]
 """
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import click
@@ -24,7 +26,7 @@ from forge.evals.case import EvalCase
 from forge.evals.runner import discover_cases, score
 from forge.llm.codex import CodexProvider
 from forge.llm.echo import EchoProvider
-from forge.llm.provider import LLMProvider
+from forge.llm.provider import LLMProvider, Message
 from forge.orchestrator import default_pipeline
 from forge.tracer import Tracer, new_run_id
 from forge.worktree import WorktreeManager
@@ -282,6 +284,51 @@ def phases() -> None:
         wired = "[green]yes[/]" if p.run is not None else "[dim]no[/]"
         table.add_row(p.name, wired, ", ".join(p.depends_on) or "-", p.description)
     console.print(table)
+
+
+# ---- llm probe ------------------------------------------------------------
+
+@main.group()
+def llm() -> None:
+    """LLM provider debugging."""
+
+
+@llm.command("probe")
+@click.option(
+    "--provider",
+    type=click.Choice(["echo", "codex"]),
+    default="codex",
+    show_default=True,
+    help="Provider to probe. Use 'echo' to verify wiring; 'codex' to verify your CLI is reachable.",
+)
+@click.option(
+    "--prompt",
+    default="Reply with only the two-letter word: OK",
+    show_default=True,
+    help="Prompt to send. Keep it tiny — this is for verifying the integration, not real work.",
+)
+def llm_probe(provider: str, prompt: str) -> None:
+    """Send a one-shot prompt to a provider and print the response.
+
+    Useful for verifying codex CLI is reachable from Python before
+    running a full eval. Prints the provider's model id, wallclock,
+    token counts, and the raw response text.
+    """
+    p = _make_provider(provider)
+    console.print(f"[bold]Probing {provider}.{p.model}[/]")
+    t0 = time.time()
+    try:
+        resp = p.complete([Message(role="user", content=prompt)])
+    except Exception as e:   # noqa: BLE001 — surface anything to the user
+        console.print(f"[red]FAILED[/]: {e}")
+        raise SystemExit(1)
+    dt = time.time() - t0
+    console.print(f"[dim]wallclock: {dt:.2f}s[/]\n")
+    console.print(resp.text)
+    console.print(
+        f"\n[dim]tokens_in={resp.tokens_in} tokens_out={resp.tokens_out} "
+        f"cost=${resp.cost_usd:.4f}[/]"
+    )
 
 
 if __name__ == "__main__":
